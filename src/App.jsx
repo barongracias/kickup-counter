@@ -2,19 +2,20 @@ import { useRef, useEffect, useState } from 'react'
 import './App.css'
 import { Pose } from '@mediapipe/pose'
 import { Camera } from '@mediapipe/camera_utils'
-import * as drawingUtils from '@mediapipe/drawing_utils'
 
+// KickupCamera handles camera setup, pose overlays, and simple blue ball detection.
 function KickupCamera() {
   const videoRef = useRef(null)
   const canvasRef = useRef(null)
   const [poseLoaded, setPoseLoaded] = useState(false)
   const [error, setError] = useState(null)
-  const [footInfo, setFootInfo] = useState('')
+  const [footInfo, setFootInfo] = useState('Waiting for camera permissions...')
   const [fps, setFps] = useState(0)
-  const [ballInfo, setBallInfo] = useState('')
+  const [ballInfo, setBallInfo] = useState('Looking for a blue ball in frame')
   const frameCount = useRef(0)
   const lastBallPosition = useRef(null)
   const ballDetectionCount = useRef(0)
+  const hasFirstResult = useRef(false)
 
   useEffect(() => {
     let camera = null
@@ -37,185 +38,203 @@ function KickupCamera() {
     }
 
     async function setup() {
+      if (!videoRef.current || !canvasRef.current) {
+        setError('Camera elements are not ready')
+        return
+      }
+
       // Setup Pose with basic settings
       pose = new Pose({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`,
-      });
+      })
       pose.setOptions({
         modelComplexity: 0,
         smoothLandmarks: false,
         enableSegmentation: false,
         minDetectionConfidence: 0.7,
         minTrackingConfidence: 0.7,
-      });
-      pose.onResults(onPoseResults);
-      setPoseLoaded(true);
+      })
+      pose.onResults(onPoseResults)
 
-      if (typeof videoRef.current !== 'object' || !videoRef.current) return;
+      if (typeof videoRef.current !== 'object' || !videoRef.current) return
       camera = new Camera(videoRef.current, {
         onFrame: async () => {
-          if (!running) return;
-          frameCount.current++; // Count frames for FPS
-          await pose.send({ image: videoRef.current });
+          if (!running) return
+          frameCount.current++ // Count frames for FPS
+          await pose.send({ image: videoRef.current })
         },
-      });
-      camera.start();
-      startFpsCounter(); // Start FPS counter
+        width: 1280,
+        height: 720,
+      })
+      await camera.start()
+      startFpsCounter() // Start FPS counter
     }
 
     function onPoseResults(results) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      
-      // Only redraw if we have pose landmarks
-      if (results.poseLandmarks) {
-        ctx.save();
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-        
-        // Draw feet tracking
-        const leftFoot = results.poseLandmarks[31];
-        const rightFoot = results.poseLandmarks[32];
-        
-        if (leftFoot) {
-          ctx.beginPath();
-          ctx.arc(leftFoot.x * canvas.width, leftFoot.y * canvas.height, 7, 0, 2 * Math.PI);
-          ctx.fillStyle = 'blue';
-          ctx.fill();
-          ctx.strokeStyle = 'white';
-          ctx.lineWidth = 2;
-          ctx.stroke();
+      const canvas = canvasRef.current
+      if (!canvas || !results.image) return
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+
+      if (canvas.width !== results.image.width || canvas.height !== results.image.height) {
+        canvas.width = results.image.width
+        canvas.height = results.image.height
+      }
+
+      ctx.save()
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height)
+
+      if (!hasFirstResult.current) {
+        hasFirstResult.current = true
+        setPoseLoaded(true)
+        setError(null)
+      }
+
+      const leftFoot = results.poseLandmarks?.[31]
+      const rightFoot = results.poseLandmarks?.[32]
+
+      // Ball detection (every 2nd frame for better stability)
+      if (frameCount.current % 2 === 0) {
+        try {
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          const blueBall = detectBlueBall(imageData)
           
-          // Add label
-          ctx.fillStyle = 'white';
-          ctx.font = '14px Arial';
-          ctx.fillText('Left Foot', leftFoot.x * canvas.width + 15, leftFoot.y * canvas.height);
-        }
-        
-        if (rightFoot) {
-          ctx.beginPath();
-          ctx.arc(rightFoot.x * canvas.width, rightFoot.y * canvas.height, 7, 0, 2 * Math.PI);
-          ctx.fillStyle = 'orange';
-          ctx.fill();
-          ctx.strokeStyle = 'white';
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          
-          // Add label
-          ctx.fillStyle = 'white';
-          ctx.font = '14px Arial';
-          ctx.fillText('Right Foot', rightFoot.x * canvas.width + 15, rightFoot.y * canvas.height);
-        }
-        
-        // Ball detection (every 2nd frame for better stability)
-        if (frameCount.current % 2 === 0) {
-          try {
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const blueBall = detectBlueBall(imageData);
-            
-            if (blueBall) {
-              // Smooth ball position to reduce flashing
-              if (lastBallPosition.current) {
-                const smoothing = 0.7; // Keep 70% of previous position
-                blueBall.center.x = blueBall.center.x * (1 - smoothing) + lastBallPosition.current.x * smoothing;
-                blueBall.center.y = blueBall.center.y * (1 - smoothing) + lastBallPosition.current.y * smoothing;
-              }
-              lastBallPosition.current = { x: blueBall.center.x, y: blueBall.center.y };
-              ballDetectionCount.current = Math.min(ballDetectionCount.current + 1, 10);
-              
-              // Draw ball bounding box
-              ctx.strokeStyle = '#FFD600';
-              ctx.lineWidth = 3;
-              ctx.beginPath();
-              blueBall.boundingBox.forEach((pt, i) => {
-                const x = pt.x * canvas.width;
-                const y = pt.y * canvas.height;
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-              });
-              ctx.closePath();
-              ctx.stroke();
-              
-              // Draw ball center
-              ctx.beginPath();
-              ctx.arc(blueBall.center.x * canvas.width, blueBall.center.y * canvas.height, 8, 0, 2 * Math.PI);
-              ctx.fillStyle = '#FFD600';
-              ctx.fill();
-              
-              setBallInfo('Ball detected ✓');
-            } else {
-              // If no ball detected, gradually fade out the last position
-              ballDetectionCount.current = Math.max(ballDetectionCount.current - 1, 0);
-              
-              if (ballDetectionCount.current > 0 && lastBallPosition.current) {
-                // Draw fading ball position
-                ctx.strokeStyle = `rgba(255, 214, 0, ${ballDetectionCount.current / 10})`;
-                ctx.lineWidth = 3;
-                ctx.beginPath();
-                ctx.arc(lastBallPosition.current.x * canvas.width, lastBallPosition.current.y * canvas.height, 8, 0, 2 * Math.PI);
-                ctx.stroke();
-                
-                setBallInfo('Ball detected ✓');
-              } else {
-                // Debug: count blue pixels to see what's happening
-                const data = imageData.data;
-                let blueCount = 0;
-                for (let i = 0; i < data.length; i += 8) { // Sample every 2nd pixel
-                  const r = data[i];
-                  const g = data[i + 1];
-                  const b = data[i + 2];
-                  if (b > 100 && r < 80 && g < 80) {
-                    blueCount++;
-                  }
-                }
-                setBallInfo(`No ball - Blue pixels: ${blueCount}`);
-              }
+          if (blueBall) {
+            // Smooth ball position to reduce flashing
+            if (lastBallPosition.current) {
+              const smoothing = 0.7 // Keep 70% of previous position
+              blueBall.center.x = blueBall.center.x * (1 - smoothing) + lastBallPosition.current.x * smoothing
+              blueBall.center.y = blueBall.center.y * (1 - smoothing) + lastBallPosition.current.y * smoothing
             }
-          } catch (error) {
-            setBallInfo('Ball detection error');
+            lastBallPosition.current = { x: blueBall.center.x, y: blueBall.center.y }
+            ballDetectionCount.current = Math.min(ballDetectionCount.current + 1, 10)
+            
+            // Draw ball bounding box
+            ctx.strokeStyle = '#FFD600'
+            ctx.lineWidth = 3
+            ctx.beginPath()
+            blueBall.boundingBox.forEach((pt, i) => {
+              const x = pt.x * canvas.width
+              const y = pt.y * canvas.height
+              if (i === 0) ctx.moveTo(x, y)
+              else ctx.lineTo(x, y)
+            })
+            ctx.closePath()
+            ctx.stroke()
+            
+            // Draw ball center
+            ctx.beginPath()
+            ctx.arc(blueBall.center.x * canvas.width, blueBall.center.y * canvas.height, 8, 0, 2 * Math.PI)
+            ctx.fillStyle = '#FFD600'
+            ctx.fill()
+            
+            setBallInfo('Ball detected ✓')
+          } else {
+            // If no ball detected, gradually fade out the last position
+            ballDetectionCount.current = Math.max(ballDetectionCount.current - 1, 0)
+            
+            if (ballDetectionCount.current > 0 && lastBallPosition.current) {
+              // Draw fading ball position
+              ctx.strokeStyle = `rgba(255, 214, 0, ${ballDetectionCount.current / 10})`
+              ctx.lineWidth = 3
+              ctx.beginPath()
+              ctx.arc(lastBallPosition.current.x * canvas.width, lastBallPosition.current.y * canvas.height, 8, 0, 2 * Math.PI)
+              ctx.stroke()
+              
+              setBallInfo('Ball detected ✓')
+            } else {
+              // Debug: count blue pixels to see what's happening
+              const data = imageData.data
+              let blueCount = 0
+              for (let i = 0; i < data.length; i += 8) { // Sample every 2nd pixel
+                const r = data[i]
+                const g = data[i + 1]
+                const b = data[i + 2]
+                if (b > 100 && r < 80 && g < 80) {
+                  blueCount++
+                }
+              }
+              setBallInfo(`No ball - Blue pixels: ${blueCount}`)
+            }
           }
+        } catch {
+          setBallInfo('Ball detection error')
         }
+      }
+      
+      // Draw feet tracking
+      if (leftFoot) {
+        ctx.beginPath()
+        ctx.arc(leftFoot.x * canvas.width, leftFoot.y * canvas.height, 7, 0, 2 * Math.PI)
+        ctx.fillStyle = 'blue'
+        ctx.fill()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 2
+        ctx.stroke()
         
-        ctx.restore();
+        // Add label
+        ctx.fillStyle = 'white'
+        ctx.font = '14px Arial'
+        ctx.fillText('Left Foot', leftFoot.x * canvas.width + 15, leftFoot.y * canvas.height)
+      }
+      
+      if (rightFoot) {
+        ctx.beginPath()
+        ctx.arc(rightFoot.x * canvas.width, rightFoot.y * canvas.height, 7, 0, 2 * Math.PI)
+        ctx.fillStyle = 'orange'
+        ctx.fill()
+        ctx.strokeStyle = 'white'
+        ctx.lineWidth = 2
+        ctx.stroke()
         
-        // Update foot info with visibility checking
-        let info = 'Feet detected: ';
-        let leftVisible = false;
-        let rightVisible = false;
-        
-        if (leftFoot) {
-          const leftX = leftFoot.x * canvas.width;
-          const leftY = leftFoot.y * canvas.height;
-          if (leftX >= 0 && leftX <= canvas.width && leftY >= 0 && leftY <= canvas.height) {
-            leftVisible = true;
-            info += 'Left ✓ ';
-          }
+        // Add label
+        ctx.fillStyle = 'white'
+        ctx.font = '14px Arial'
+        ctx.fillText('Right Foot', rightFoot.x * canvas.width + 15, rightFoot.y * canvas.height)
+      }
+
+      ctx.restore()
+      
+      // Update foot info with visibility checking
+      let info = 'Feet detected: '
+      let leftVisible = false
+      let rightVisible = false
+      
+      if (leftFoot) {
+        const leftX = leftFoot.x * canvas.width
+        const leftY = leftFoot.y * canvas.height
+        if (leftX >= 0 && leftX <= canvas.width && leftY >= 0 && leftY <= canvas.height) {
+          leftVisible = true
+          info += 'Left ✓ '
         }
-        
-        if (rightFoot) {
-          const rightX = rightFoot.x * canvas.width;
-          const rightY = rightFoot.y * canvas.height;
-          if (rightX >= 0 && rightX <= canvas.width && rightY >= 0 && rightY <= canvas.height) {
-            rightVisible = true;
-            info += 'Right ✓ ';
-          }
+      }
+      
+      if (rightFoot) {
+        const rightX = rightFoot.x * canvas.width
+        const rightY = rightFoot.y * canvas.height
+        if (rightX >= 0 && rightX <= canvas.width && rightY >= 0 && rightY <= canvas.height) {
+          rightVisible = true
+          info += 'Right ✓ '
         }
-        
-        if (!leftVisible && !rightVisible) {
-          info = 'Move feet into view';
-        }
-        
-        setFootInfo(info);
-      } else {
-        setFootInfo('No pose detected - make sure you are visible in the camera');
+      }
+      
+      if (!leftVisible && !rightVisible) {
+        info = 'Move feet into view'
+      }
+      
+      setFootInfo(info)
+      if (!leftFoot && !rightFoot) {
+        setFootInfo('No pose detected - make sure you are visible in the camera')
       }
     }
 
-    setup().catch((e) => setError(e.message))
+    setup().catch((e) => setError(e?.message || 'Unable to start the camera feed'))
     return () => {
       running = false
       stopFpsCounter()
       if (camera) camera.stop()
+      if (pose) pose.close()
     }
   }, [])
 
@@ -287,7 +306,7 @@ function KickupCamera() {
       <div className="foot-info">{footInfo}</div>
       <div className="ball-info">{ballInfo}</div>
       <div className="fps-display">FPS: {fps}</div>
-      {!poseLoaded && <div className="loading">Loading pose detection model...</div>}
+      {!poseLoaded && !error && <div className="loading">Loading pose detection model...</div>}
       {error && <div className="error">{error}</div>}
     </div>
   )

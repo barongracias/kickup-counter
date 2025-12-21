@@ -1,15 +1,13 @@
 # ⚽ Kick Up Counter
 
-A fun and interactive web application for counting soccer/football kick ups (juggling). Built with React and Vite.
+Camera-driven juggling helper that overlays MediaPipe pose data and a simple blue-ball detector. Built with React and Vite.
 
 ## Features
 
-- **Interactive Counter**: Click the "Kick!" button to increment your kick up count
-- **Animated Ball**: The soccer ball bounces with each kick for visual feedback
-- **High Score Tracking**: Your best score is automatically saved and persists between sessions
-- **Responsive Design**: Works great on both desktop and mobile devices
-- **Modern UI**: Beautiful gradients and smooth animations
-- **Rate Limiting**: Prevents rapid clicking to simulate realistic kick up timing
+- Pose-based foot markers with left/right labeling and visibility cues
+- Lightweight blue ball detection with smoothing and fade-out when confidence drops
+- FPS readout and loading/error overlays for quick debugging
+- Responsive layout with mirrored camera feed and canvas overlay
 
 ## Getting Started
 
@@ -22,21 +20,25 @@ A fun and interactive web application for counting soccer/football kick ups (jug
    ```bash
    npm run dev
    ```
-4. Open your browser and navigate to the local development URL
+4. Open your browser at the local development URL and allow camera permissions (https or localhost is required)
 
-## How to Play
+## Using the App
 
-1. Click the "Kick!" button to simulate a kick up
-2. Watch the ball bounce and your counter increase
-3. Try to beat your high score!
-4. Use the reset buttons to start over or clear your high score
+1. Stand far enough back for both feet to be visible; the overlay will mark the left foot in blue and right in orange
+2. Watch the `Feet detected` status to confirm visibility; move until both show a check
+3. Hold a clearly blue ball in frame for detection; a yellow box and center dot will appear when found
+4. Keep lighting even and backgrounds uncluttered for the most stable results
 
-## Technologies Used
+## Components
 
-- React 19
-- Vite
-- CSS3 with animations and gradients
-- Local Storage for score persistence
+- `src/App.jsx` (`KickupCamera`): sets up the MediaPipe Pose model and camera feed, draws pose landmarks and labels to the canvas, runs the blue-ball color detector, tracks FPS, and cleans up camera/model resources on unmount.
+- `src/App.jsx` (`App`): page shell and copy for the experience.
+
+## Troubleshooting
+
+- Stuck on “Loading pose detection model…”: confirm camera permissions are granted and that the CDN (jsdelivr) is reachable.
+- Ball not found: ensure you are using a bright blue ball, keep it in good light, and reduce other strong blue objects in view. The status will show a blue pixel count when no ball is detected.
+- Pose not detected: make sure your full body, especially feet, are within the frame and the camera is not excessively angled.
 
 ## Development
 
