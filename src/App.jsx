@@ -1,9 +1,9 @@
-import { useRef, useEffect, useState } from 'react'
+import { useRef, useEffect, useState, useCallback } from 'react'
 import './App.css'
 import { Pose } from '@mediapipe/pose'
 import { Camera } from '@mediapipe/camera_utils'
 
-// Detect a blue ball in an ImageData frame (mirrored canvas space).
+// Detect a blue ball in an already-mirrored ImageData frame.
 // Returns { center: {x, y}, boundingBox: [{x,y}x4] } (normalized 0-1) or null.
 function detectBlueBall(imageData) {
   const { data, width, height } = imageData
@@ -29,11 +29,11 @@ function detectBlueBall(imageData) {
   const maxX = Math.max(...bluePixels.map(p => p.x))
   const minY = Math.min(...bluePixels.map(p => p.y))
   const maxY = Math.max(...bluePixels.map(p => p.y))
-  const w = maxX - minX
-  const h = maxY - minY
-  const aspect = w / h
+  const bw = maxX - minX
+  const bh = maxY - minY
+  const aspect = bw / bh
 
-  if (w < 20 || h < 20 || aspect < 0.3 || aspect > 3.0) return null
+  if (bw < 20 || bh < 20 || aspect < 0.3 || aspect > 3.0) return null
 
   return {
     center: { x: centerX / width, y: centerY / height },
@@ -96,9 +96,8 @@ function KickupCamera({ onKick }) {
       fpsFrames.current++
       detFrame.current++
 
+      // Draw the video frame mirrored so the canvas overlay matches the CSS-mirrored video
       ctx.save()
-
-      // Mirror the canvas so overlays match the CSS-mirrored video
       ctx.translate(canvas.width, 0)
       ctx.scale(-1, 1)
       ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height)
@@ -109,26 +108,26 @@ function KickupCamera({ onKick }) {
         setStatus({ pose: true, error: null })
       }
 
-      // MediaPipe landmarks are in unmirrored space; mirror X for display
+      // MediaPipe landmarks are in unmirrored space; flip X to match the mirrored canvas
       const mirrorX = (lm) => lm ? { ...lm, x: 1 - lm.x } : null
       const leftFoot = mirrorX(results.poseLandmarks?.[31])
       const rightFoot = mirrorX(results.poseLandmarks?.[32])
 
-      // Update confidence from first visible foot landmark
       const rawLeft = results.poseLandmarks?.[31]
       const rawRight = results.poseLandmarks?.[32]
       const conf = rawLeft?.visibility ?? rawRight?.visibility ?? 0
       setConfidence(Math.round(conf * 100))
 
-      // Ball detection every other frame
+      // Ball detection every other frame to save CPU
       let ballCenter = null
       if (detFrame.current % 2 === 0) {
         try {
+          // imageData is already in mirrored canvas space
           const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
           const ball = detectBlueBall(imageData)
 
           if (ball) {
-            // Smooth position
+            // Exponential smoothing of ball position
             if (lastBallPos.current) {
               const s = 0.6
               ball.center.x = ball.center.x * (1 - s) + lastBallPos.current.x * s
@@ -138,7 +137,7 @@ function KickupCamera({ onKick }) {
             ballFade.current = 10
             ballCenter = ball.center
 
-            // Draw bounding box
+            // Draw bounding box (coordinates are in mirrored canvas space — draw directly)
             ctx.save()
             ctx.strokeStyle = '#FFD600'
             ctx.lineWidth = 3
@@ -151,7 +150,6 @@ function KickupCamera({ onKick }) {
             })
             ctx.closePath()
             ctx.stroke()
-            // Center dot
             ctx.beginPath()
             ctx.arc(ball.center.x * canvas.width, ball.center.y * canvas.height, 8, 0, Math.PI * 2)
             ctx.fillStyle = '#FFD600'
@@ -167,7 +165,11 @@ function KickupCamera({ onKick }) {
               ctx.strokeStyle = `rgba(255,214,0,${alpha})`
               ctx.lineWidth = 3
               ctx.beginPath()
-              ctx.arc(lastBallPos.current.x * canvas.width, lastBallPos.current.y * canvas.height, 8, 0, Math.PI * 2)
+              ctx.arc(
+                lastBallPos.current.x * canvas.width,
+                lastBallPos.current.y * canvas.height,
+                8, 0, Math.PI * 2
+              )
               ctx.stroke()
               ctx.restore()
               ballCenter = lastBallPos.current
@@ -180,17 +182,15 @@ function KickupCamera({ onKick }) {
           setBallStatus('Detection error')
         }
 
-        // Kick counting: rising edge of ball-near-foot, with cooldown
+        // Rising-edge kick detection with cooldown
         const THRESH = 0.15
         const COOLDOWN = 15
         let nearFoot = false
         if (ballCenter && (leftFoot || rightFoot)) {
-          const check = (foot) => {
-            if (!foot) return false
-            return Math.abs(ballCenter.x - foot.x) < THRESH &&
-                   Math.abs(ballCenter.y - foot.y) < THRESH
-          }
-          nearFoot = check(leftFoot) || check(rightFoot)
+          const nearFn = (foot) => foot &&
+            Math.abs(ballCenter.x - foot.x) < THRESH &&
+            Math.abs(ballCenter.y - foot.y) < THRESH
+          nearFoot = nearFn(leftFoot) || nearFn(rightFoot)
         }
 
         if (nearFoot && !ballNearFoot.current &&
@@ -201,7 +201,7 @@ function KickupCamera({ onKick }) {
         ballNearFoot.current = nearFoot
       }
 
-      // Draw foot markers
+      // Draw foot markers at mirrored positions
       const drawFoot = (foot, color, label) => {
         if (!foot) return
         ctx.save()
@@ -220,7 +220,7 @@ function KickupCamera({ onKick }) {
       drawFoot(leftFoot, '#3b82f6', 'L')
       drawFoot(rightFoot, '#f97316', 'R')
 
-      // Foot status string
+      // Update foot status string
       const l = leftFoot && leftFoot.x >= 0 && leftFoot.x <= 1
       const r = rightFoot && rightFoot.x >= 0 && rightFoot.x <= 1
       if (!results.poseLandmarks) {
@@ -274,7 +274,7 @@ function KickupCamera({ onKick }) {
       <video ref={videoRef} autoPlay playsInline muted className="feed-video" />
       <canvas ref={canvasRef} className="feed-canvas" />
 
-      {/* Top-left: foot + ball status */}
+      {/* Top-left: foot + ball status pills */}
       <div className="overlay-panel status-panel">
         <div className={`pill ${footStatus.includes('Both') ? 'pill-green' : 'pill-dim'}`}>
           {footStatus}
@@ -309,17 +309,17 @@ function App() {
   const [count, setCount] = useState(0)
   const [pulse, setPulse] = useState(false)
 
-  const handleKick = () => {
+  const handleKick = useCallback(() => {
     setCount(c => c + 1)
     setPulse(true)
     setTimeout(() => setPulse(false), 300)
-  }
+  }, [])
 
   return (
     <div className="app">
       <KickupCamera onKick={handleKick} />
 
-      {/* Counter overlay – bottom center */}
+      {/* Counter overlay – bottom centre */}
       <div className="counter-overlay">
         <div className="counter-card">
           <span className="counter-label">KICKS</span>
@@ -328,7 +328,7 @@ function App() {
         </div>
       </div>
 
-      {/* Title overlay – top center */}
+      {/* Title overlay – top centre */}
       <div className="title-overlay">
         <span className="app-title">Kick Up Counter</span>
       </div>
