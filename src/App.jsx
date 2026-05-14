@@ -305,15 +305,36 @@ function KickupCamera({ onKick }) {
   )
 }
 
+const MILESTONES = new Set([10, 25, 50, 100, 150, 200, 250, 500, 1000])
+
 function App() {
   const [count, setCount] = useState(0)
   const [pulse, setPulse] = useState(false)
+  const [milestone, setMilestone] = useState(false)
+  const mounted = useRef(false)
+
+  useEffect(() => {
+    mounted.current = true
+  }, [])
 
   const handleKick = useCallback(() => {
-    setCount(c => c + 1)
+    setCount(c => {
+      const next = c + 1
+      if (MILESTONES.has(next)) {
+        setMilestone(true)
+        setTimeout(() => setMilestone(false), 720)
+      }
+      return next
+    })
     setPulse(true)
-    setTimeout(() => setPulse(false), 300)
+    setTimeout(() => setPulse(false), 360)
   }, [])
+
+  const counterClass = [
+    'kicks-counter',
+    !mounted.current ? 'mount-in' : '',
+    milestone ? 'milestone' : (pulse ? 'pulse' : ''),
+  ].filter(Boolean).join(' ')
 
   return (
     <div className="app">
@@ -321,10 +342,16 @@ function App() {
 
       {/* Counter overlay – bottom centre */}
       <div className="counter-overlay">
-        <div className="counter-card">
-          <span className="counter-label">KICKS</span>
-          <span className={`counter-number${pulse ? ' pulse' : ''}`}>{count}</span>
+        <div className={`counter-card${milestone ? ' has-milestone' : ''}`}>
+          <span className={counterClass}>{count}</span>
+          <span className="counter-label">Kick-Ups</span>
           <button className="reset-btn" onClick={() => setCount(0)}>Reset</button>
+          <div className="spark-layer" aria-hidden="true">
+            <span className="spark" />
+            <span className="spark" />
+            <span className="spark" />
+            <span className="spark" />
+          </div>
         </div>
       </div>
 
